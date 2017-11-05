@@ -11,38 +11,19 @@ import updater.mirror;
 public class Main {
 	public static String name="minecraft mirror";
 	public static String version="0.0.1";
-	public static String maker="Âé»¨a";
+	public static String maker="éº»èŠ±a";
 	public static String buliddate="2017,11,4";
 	public static Boolean noexit=true;
 	static Scanner s = new Scanner(System.in);
 	 
 	  
-	    public static void showTimer() {  
-	        TimerTask task = new TimerTask() {  
-	            @Override  
-	            public void run() {  
-	            	mirror.update();
-	               
-	            }  
-	  
-	        };  
-	  
-	        Calendar calendar = Calendar.getInstance();  
-	        int year = calendar.get(Calendar.YEAR);  
-	        int month = calendar.get(Calendar.MONTH) + 1;  
-	        int day = calendar.get(Calendar.DAY_OF_MONTH);  
-	        /*** ¶¨ÖÆÃ¿ÈÕ00£º24£º00Ö´ĞĞ·½·¨ ***/  
-	        calendar.set(year, month, day, 00, 00, 00);  
-	        Date date = calendar.getTime();  
-	        Timer timer = new Timer();  
-	        timer.schedule(task, date);  
-	    }  
+
 	public static void main(String[] args) {
-		// TODO ×Ô¶¯Éú³ÉµÄ·½·¨´æ¸ù
+		// TODO è‡ªåŠ¨ç”Ÿæˆçš„æ–¹æ³•å­˜æ ¹
 		
 		System.out.println("starting......");
 		System.out.println("loading "+name+" "+version+" BY:"+maker+" "+buliddate);
-		showTimer();
+		
 		while (noexit) {
 			command(input());
 			
@@ -78,13 +59,13 @@ public class Main {
 		}
 		if(args.equals("help")) {
 			//noexit=false;
-			System.out.println("quit ÍË³ö³ÌĞò \nhelp ²é¿´°ïÖúÁĞ±í");
+			System.out.println("quit é€€å‡ºç¨‹åº \nhelp æŸ¥çœ‹å¸®åŠ©åˆ—è¡¨");
 			return;
 			
 		
 			
 		}
-		System.out.println("Î´ÖªÖ¸Áî£¬ÇëÊ¹ÓÃhelp²é¿´Ö¸ÁîÁĞ±í");
+		System.out.println("æœªçŸ¥æŒ‡ä»¤ï¼Œè¯·ä½¿ç”¨helpæŸ¥çœ‹æŒ‡ä»¤åˆ—è¡¨");
 		
 	}
 
