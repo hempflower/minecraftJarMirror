@@ -3,4 +3,4 @@
 目前支持镜像以下内容：
   各版本核心
   各版本json
-  asstesindex 文件
+  assets index 文件
