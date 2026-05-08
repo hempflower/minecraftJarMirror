@@ -87,7 +87,6 @@ public class MirrorService {
         ExecutorService executor = Executors.newFixedThreadPool(Math.max(1, threads));
         AtomicInteger succeeded = new AtomicInteger(0);
         AtomicInteger failed = new AtomicInteger(0);
-        AtomicInteger skipped = new AtomicInteger(0);
 
         for (VersionManifest.VersionEntry entry : manifest.versions) {
             executor.submit(() -> {
@@ -109,8 +108,8 @@ public class MirrorService {
             Thread.currentThread().interrupt();
         }
 
-        log.info("=== Mirror complete: {} succeeded, {} failed, {} skipped ===",
-                succeeded.get(), failed.get(), skipped.get());
+        log.info("=== Mirror complete: {} succeeded, {} failed ===",
+                succeeded.get(), failed.get());
     }
 
     /**
@@ -174,7 +173,8 @@ public class MirrorService {
 
             // e. Download actual asset files (if enabled)
             if (config.isWithAssets()) {
-                downloadAssetFiles(entry.id);
+                String assetIndexId = detail.assetIndex != null ? detail.assetIndex.id : entry.id;
+                downloadAssetFiles(entry.id, assetIndexId);
             }
 
             log.info("  [{}] Done", entry.id);
@@ -194,25 +194,14 @@ public class MirrorService {
      *
      * Asset files are stored as: assets/objects/{hash[0..1]}/{hash}
      */
-    private void downloadAssetFiles(String versionId) {
+    private void downloadAssetFiles(String versionId, String assetIndexId) {
         Path indexesDir = config.getAssetsIndexesDir();
 
-        // Find the asset index file for this version
-        Path indexFile = indexesDir.resolve(versionId + ".json");
+        // Find the asset index file. The file is named by assetIndex.id
+        // (which may differ from versionId when versions share an index).
+        Path indexFile = indexesDir.resolve(assetIndexId + ".json");
         if (!Files.exists(indexFile)) {
-            // Try by walking the directory
-            try (Stream<Path> files = Files.list(indexesDir)) {
-                indexFile = files
-                        .filter(p -> p.getFileName().toString().startsWith(versionId))
-                        .findFirst().orElse(null);
-            } catch (IOException e) {
-                log.warn("  [{}] Cannot list asset indexes in {}", versionId, indexesDir);
-                return;
-            }
-        }
-
-        if (indexFile == null || !Files.exists(indexFile)) {
-            log.warn("  [{}] No asset index file found", versionId);
+            log.warn("  [{}] No asset index file '{}' found", versionId, assetIndexId);
             return;
         }
 

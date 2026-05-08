@@ -1,19 +1,35 @@
 package com.mcmirror.config;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class MirrorConfigTest {
 
     private MirrorConfig config;
+    private final Set<String> testProperties = new java.util.HashSet<>();
 
     @BeforeEach
     void setUp() {
         config = new MirrorConfig();
+    }
+
+    @AfterEach
+    void cleanUpSystemProperties() {
+        for (String key : testProperties) {
+            System.clearProperty(key);
+        }
+        testProperties.clear();
+    }
+
+    void setTestProperty(String key, String value) {
+        System.setProperty(key, value);
+        testProperties.add(key);
     }
 
     @Test
@@ -59,15 +75,29 @@ class MirrorConfigTest {
 
     @Test
     void shouldOverrideFromSystemProperty() {
-        System.setProperty("mcmirror.maxRetries", "5");
-        System.setProperty("mcmirror.withAssets", "true");
+        setTestProperty("mcmirror.maxRetries", "5");
+        setTestProperty("mcmirror.withAssets", "true");
 
         MirrorConfig c2 = new MirrorConfig();
         assertThat(c2.getMaxRetries()).isEqualTo(5);
         assertThat(c2.isWithAssets()).isTrue();
+    }
 
-        // Clean up
-        System.clearProperty("mcmirror.maxRetries");
-        System.clearProperty("mcmirror.withAssets");
+    @Test
+    void shouldHaveCorrectLegacyAssetUrl() {
+        assertThat(config.getLegacyAssetUrl())
+                .isEqualTo("https://launchermeta.mojang.com/mc/assets/legacy/c0fd82e8ce9fbc93119e40d96d5a4e62cfa3f729/legacy.json");
+    }
+
+    @Test
+    void shouldResolveVersionsJsonPath() {
+        assertThat(config.getVersionsJsonPath())
+                .isEqualTo(Path.of(System.getProperty("user.dir"), "mcdl", "versions.json"));
+    }
+
+    @Test
+    void shouldResolveLegacyJsonPath() {
+        assertThat(config.getLegacyJsonPath())
+                .isEqualTo(Path.of(System.getProperty("user.dir"), "mcdl", "assets", "indexes", "legacy.json"));
     }
 }

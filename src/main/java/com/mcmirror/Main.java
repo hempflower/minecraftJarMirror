@@ -107,7 +107,7 @@ public class Main implements Callable<Integer> {
         MirrorService service = new MirrorService(config);
 
         try (Scanner scanner = new Scanner(System.in, "UTF-8")) {
-            while (true) {
+            while (scanner.hasNextLine()) {
                 System.out.print("> ");
                 String input = scanner.nextLine().trim();
 

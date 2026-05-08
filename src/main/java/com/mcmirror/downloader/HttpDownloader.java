@@ -58,12 +58,25 @@ public class HttpDownloader {
         if (Files.exists(targetFile)) {
             try {
                 long existingSize = Files.size(targetFile);
-                if (existingSize > 0 && (expectedSize < 0 || existingSize == expectedSize)) {
-                    log.debug("File already exists, skipping: {}", targetFile);
-                    return DownloadResult.skipped(targetFile);
-                }
                 if (existingSize == 0) {
                     Files.delete(targetFile);
+                } else if (expectedSize < 0 || existingSize == expectedSize) {
+                    // If hash verification is enabled and we have an expected hash,
+                    // verify the file's integrity before skipping
+                    if (config.isVerifyHash() && expectedSha1 != null && !expectedSha1.isEmpty()) {
+                        String actualSha1 = computeSha1(targetFile);
+                        if (expectedSha1.equalsIgnoreCase(actualSha1)) {
+                            log.debug("File already exists with valid hash, skipping: {}", targetFile);
+                            return DownloadResult.skipped(targetFile);
+                        } else {
+                            log.warn("Existing file has wrong hash (expected {}, got {}), re-downloading: {}",
+                                    expectedSha1, actualSha1, targetFile);
+                            Files.delete(targetFile);
+                        }
+                    } else {
+                        log.debug("File already exists, skipping: {}", targetFile);
+                        return DownloadResult.skipped(targetFile);
+                    }
                 }
             } catch (IOException e) {
                 log.warn("Could not check existing file: {}", targetFile, e);
@@ -191,6 +204,25 @@ public class HttpDownloader {
                 actualSha1 != null ? actualSha1 : "unverified", attempt);
 
         return DownloadResult.success(targetFile, bytesRead, actualSha1, attempt);
+    }
+
+    /**
+     * Compute the SHA-1 hex digest of a local file.
+     */
+    private static String computeSha1(Path file) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-1");
+            try (InputStream in = Files.newInputStream(file)) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException("SHA-1 not available", e);
+        }
     }
 
     public static String formatSize(long bytes) {
