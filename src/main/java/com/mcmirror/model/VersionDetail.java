@@ -27,6 +27,15 @@ public class VersionDetail {
     public static class Downloads {
         @SerializedName("client")
         public Artifact client;
+
+        @SerializedName("server")
+        public Artifact server;
+
+        @SerializedName("client_mappings")
+        public Artifact clientMappings;
+
+        @SerializedName("server_mappings")
+        public Artifact serverMappings;
     }
 
     public static class Artifact {

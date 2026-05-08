@@ -100,4 +100,46 @@ class MirrorConfigTest {
         assertThat(config.getLegacyJsonPath())
                 .isEqualTo(Path.of(System.getProperty("user.dir"), "mcdl", "assets", "indexes", "legacy.json"));
     }
+
+    @Test
+    void shouldHaveDefaultVersionFilterAsNull() {
+        assertThat(config.getVersionType()).isNull();
+        assertThat(config.getIncludePattern()).isNull();
+        assertThat(config.getExcludePattern()).isNull();
+    }
+
+    @Test
+    void shouldOverrideBaseDirFromSystemProperty() {
+        setTestProperty("mcmirror.baseDir", "/custom/mirror");
+        MirrorConfig c2 = new MirrorConfig();
+        assertThat(c2.getBaseDir()).isEqualTo(Path.of("/custom/mirror"));
+        assertThat(c2.getDataDir()).isEqualTo(Path.of("/custom/mirror", "mcdl"));
+    }
+
+    @Test
+    void shouldOverrideVersionFilterFromSystemProperty() {
+        // Use simple patterns without regex backslash escaping to avoid confusion
+        setTestProperty("mcmirror.versionType", "snapshot");
+        setTestProperty("mcmirror.include", "1[.]16.*");
+        setTestProperty("mcmirror.exclude", ".*pre.*");
+
+        MirrorConfig c2 = new MirrorConfig();
+        assertThat(c2.getVersionType()).isEqualTo("snapshot");
+        assertThat(c2.getIncludePattern()).isEqualTo("1[.]16.*");
+        assertThat(c2.getExcludePattern()).isEqualTo(".*pre.*");
+    }
+
+    @Test
+    void shouldParseBoolVariousCases() {
+        setTestProperty("mcmirror.withAssets", "TRUE");
+        MirrorConfig c2 = new MirrorConfig();
+        assertThat(c2.isWithAssets()).isTrue();
+    }
+
+    @Test
+    void shouldIgnoreBogusThreadCount() {
+        setTestProperty("mcmirror.threads", "not-a-number");
+        MirrorConfig c2 = new MirrorConfig();
+        assertThat(c2.getThreadCount()).isEqualTo(4); // stays at default
+    }
 }

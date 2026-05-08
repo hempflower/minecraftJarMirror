@@ -22,6 +22,9 @@ public class MirrorConfig {
     private final String userAgent;
     private final String versionManifestUrl;
     private final String legacyAssetUrl;
+    private final String versionType;
+    private final String includePattern;
+    private final String excludePattern;
 
     private static final String DEFAULT_USER_AGENT = "MCMirror/2.0 (Java)";
 
@@ -39,7 +42,7 @@ public class MirrorConfig {
     public MirrorConfig() {
         this.props = loadProperties();
 
-        this.baseDir = Path.of(System.getProperty("user.dir"));
+        this.baseDir = Path.of(getString("baseDir", System.getProperty("user.dir")));
         this.maxRetries = getInt("maxRetries", 3);
         this.connectTimeoutMs = getInt("connectTimeoutMs", 10_000);
         this.readTimeoutMs = getInt("readTimeoutMs", 30_000);
@@ -49,6 +52,9 @@ public class MirrorConfig {
         this.userAgent = getString("userAgent", DEFAULT_USER_AGENT);
         this.versionManifestUrl = getString("versionManifestUrl", DEFAULT_VERSION_MANIFEST_URL);
         this.legacyAssetUrl = getString("legacyAssetUrl", DEFAULT_LEGACY_ASSET_URL);
+        this.versionType = getString("versionType", null);
+        this.includePattern = getString("include", null);
+        this.excludePattern = getString("exclude", null);
     }
 
     private Properties loadProperties() {
@@ -57,7 +63,9 @@ public class MirrorConfig {
             if (in != null) {
                 p.load(in);
             }
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            System.err.println("[WARN] Failed to load application.properties: " + e.getMessage());
+        }
         return p;
     }
 
@@ -163,11 +171,21 @@ public class MirrorConfig {
         return withAssets;
     }
 
+    public String getVersionType() {
+        return versionType;
+    }
+
+    public String getIncludePattern() {
+        return includePattern;
+    }
+
+    public String getExcludePattern() {
+        return excludePattern;
+    }
+
     // --- Constants ---
 
     public static final String LEGACY_ASSET_ID = "legacy";
-    public static final String LEGACY_ASSET_URL_CHECK =
-            "https://launchermeta.mojang.com/mc/assets/legacy/c0fd82e8ce9fbc93119e40d96d5a4e62cfa3f729/legacy.json";
 
     /** Base URL for downloading individual asset files. */
     public static final String ASSETS_BASE_URL = "https://resources.download.minecraft.net";

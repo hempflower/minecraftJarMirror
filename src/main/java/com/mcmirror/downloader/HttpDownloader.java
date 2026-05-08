@@ -7,25 +7,35 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.HexFormat;
 
 /**
  * HTTP downloader with retry, progress reporting, and optional SHA-1 verification.
+ * Uses {@link java.net.http.HttpClient} (HTTP/2-capable) for efficient bulk downloads.
  */
 public class HttpDownloader {
 
     private static final Logger log = LoggerFactory.getLogger(HttpDownloader.class);
 
     private final MirrorConfig config;
+    private final HttpClient httpClient;
 
     public HttpDownloader(MirrorConfig config) {
         this.config = config;
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(config.getConnectTimeoutMs()))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
     }
 
     /**
@@ -43,9 +53,9 @@ public class HttpDownloader {
     /**
      * Download a file with expected SHA-1 verification.
      *
-     * @param url         source URL
-     * @param targetDir   directory to save into
-     * @param fileName    output file name
+     * @param url          source URL
+     * @param targetDir    directory to save into
+     * @param fileName     output file name
      * @param expectedSha1 expected SHA-1 hex (null to skip verification)
      * @param expectedSize expected file size in bytes (-1 to skip check)
      * @return download result
@@ -61,8 +71,6 @@ public class HttpDownloader {
                 if (existingSize == 0) {
                     Files.delete(targetFile);
                 } else if (expectedSize < 0 || existingSize == expectedSize) {
-                    // If hash verification is enabled and we have an expected hash,
-                    // verify the file's integrity before skipping
                     if (config.isVerifyHash() && expectedSha1 != null && !expectedSha1.isEmpty()) {
                         String actualSha1 = computeSha1(targetFile);
                         if (expectedSha1.equalsIgnoreCase(actualSha1)) {
@@ -109,32 +117,44 @@ public class HttpDownloader {
                         Thread.currentThread().interrupt();
                         break;
                     }
-                    // Clean up partial file
                     try { Files.deleteIfExists(targetFile); } catch (IOException ignored) {}
                 }
             }
         }
 
-        return DownloadResult.failure(lastException != null ? lastException.getMessage() : "Unknown error", maxRetries + 1);
+        return DownloadResult.failure(
+                lastException != null ? lastException.getMessage() : "Unknown error",
+                maxRetries + 1);
     }
 
     private DownloadResult doDownload(String urlStr, Path targetFile, String expectedSha1, int attempt)
             throws IOException {
 
-        URI uri = URI.create(urlStr);
-        HttpURLConnection conn = (HttpURLConnection) uri.toURL().openConnection();
-        conn.setConnectTimeout(config.getConnectTimeoutMs());
-        conn.setReadTimeout(config.getReadTimeoutMs());
-        conn.setRequestProperty("User-Agent", config.getUserAgent());
-        conn.setInstanceFollowRedirects(true);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(urlStr))
+                .timeout(Duration.ofMillis(config.getReadTimeoutMs()))
+                .header("User-Agent", config.getUserAgent())
+                .GET()
+                .build();
 
-        int status = conn.getResponseCode();
-        if (status != HttpURLConnection.HTTP_OK) {
-            conn.disconnect();
+        HttpResponse<InputStream> response;
+        try {
+            response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        } catch (HttpTimeoutException e) {
+            throw new IOException("Request timed out for " + urlStr, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Download interrupted for " + urlStr, e);
+        }
+
+        int status = response.statusCode();
+        if (status != 200) {
+            // Drain the body before throwing
+            try { response.body().close(); } catch (IOException ignored) {}
             throw new IOException("HTTP " + status + " for " + urlStr);
         }
 
-        long contentLength = conn.getContentLengthLong();
+        long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1);
         log.info("Downloading: {} ({})", targetFile.getFileName(),
                 contentLength > 0 ? formatSize(contentLength) : "unknown size");
 
@@ -148,7 +168,7 @@ public class HttpDownloader {
         }
 
         long bytesRead;
-        try (InputStream in = conn.getInputStream();
+        try (InputStream in = response.body();
              OutputStream out = Files.newOutputStream(targetFile)) {
 
             byte[] buffer = new byte[8192];
@@ -178,8 +198,6 @@ public class HttpDownloader {
                     lastReportBytes = bytesRead;
                 }
             }
-        } finally {
-            conn.disconnect();
         }
 
         // Verify content length if known
@@ -230,5 +248,13 @@ public class HttpDownloader {
         if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
         if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
         return String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    public static String formatTime(long millis) {
+        if (millis < 1000) return millis + "ms";
+        if (millis < 60_000) return String.format("%.1fs", millis / 1000.0);
+        long minutes = millis / 60_000;
+        long seconds = (millis % 60_000) / 1000;
+        return String.format("%dm%ds", minutes, seconds);
     }
 }
