@@ -3,6 +3,7 @@ package com.mcmirror.service;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
+import com.mcmirror.Main;
 import com.mcmirror.config.MirrorConfig;
 import com.mcmirror.downloader.DownloadResult;
 import com.mcmirror.downloader.HttpDownloader;
@@ -18,10 +19,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -51,20 +54,12 @@ public class MirrorService {
      * Execute the full mirror update.
      */
     public void execute() {
-        log.info("=== Minecraft Mirror {} ===", "2.0.0");
+        log.info("=== {} {} ===", Main.NAME, Main.VERSION);
         log.info("Data directory: {}", config.getDataDir().toAbsolutePath());
         log.info("Threads: {}, Max retries: {}, With assets: {}",
                 config.getThreadCount(), config.getMaxRetries(), config.isWithAssets());
 
-        // 1. Clean existing files to force re-download
-        try {
-            Files.deleteIfExists(config.getVersionsJsonPath());
-            Files.deleteIfExists(config.getLegacyJsonPath());
-        } catch (IOException e) {
-            log.warn("Failed to clean existing files", e);
-        }
-
-        // 2. Download legacy asset index
+        // 1. Download legacy asset index (idempotent — skip logic handles already-downloaded)
         log.info("--- Downloading legacy asset index ---");
         DownloadResult legacyResult = downloader.download(
                 config.getLegacyAssetUrl(),
@@ -72,7 +67,7 @@ public class MirrorService {
                 MirrorConfig.LEGACY_ASSET_ID + ".json");
         log.info("Legacy: {}", legacyResult.isSuccess() ? "OK" : "FAILED - " + legacyResult.getErrorMessage());
 
-        // 3. Fetch and parse version manifest
+        // 2. Fetch and parse version manifest
         log.info("--- Downloading version manifest ---");
         VersionManifest manifest = versionService.fetchManifest();
         if (manifest == null) {
@@ -80,32 +75,67 @@ public class MirrorService {
             return;
         }
 
-        log.info("Found {} versions to mirror", manifest.versions.length);
+        // Filter versions by type, include, and exclude patterns
+        List<VersionManifest.VersionEntry> versions = new java.util.ArrayList<>();
+        Pattern includePattern = config.getIncludePattern() != null
+                ? Pattern.compile(config.getIncludePattern()) : null;
+        Pattern excludePattern = config.getExcludePattern() != null
+                ? Pattern.compile(config.getExcludePattern()) : null;
 
-        // 4. Mirror each version (parallel)
-        int threads = Math.min(config.getThreadCount(), manifest.versions.length);
-        ExecutorService executor = Executors.newFixedThreadPool(Math.max(1, threads));
+        for (VersionManifest.VersionEntry entry : manifest.versions) {
+            // Filter by version type (release, snapshot, old_beta, old_alpha)
+            if (config.getVersionType() != null
+                    && !config.getVersionType().equalsIgnoreCase(entry.type)) {
+                continue;
+            }
+            // Filter by include regex
+            if (includePattern != null && !includePattern.matcher(entry.id).matches()) {
+                continue;
+            }
+            // Filter by exclude regex
+            if (excludePattern != null && excludePattern.matcher(entry.id).matches()) {
+                continue;
+            }
+            versions.add(entry);
+        }
+        log.info("Found {} versions to mirror (filtered from {})", versions.size(), manifest.versions.length);
+
+        // 3. Mirror each version (parallel)
+        int threads = Math.min(config.getThreadCount(), versions.size());
+        ExecutorService versionExecutor = Executors.newFixedThreadPool(Math.max(1, threads));
+        ExecutorService assetExecutor = config.isWithAssets()
+                ? Executors.newFixedThreadPool(Math.max(1, threads))
+                : null;
         AtomicInteger succeeded = new AtomicInteger(0);
         AtomicInteger failed = new AtomicInteger(0);
 
-        for (VersionManifest.VersionEntry entry : manifest.versions) {
-            executor.submit(() -> {
-                boolean ok = mirrorVersion(entry);
-                if (ok) {
-                    succeeded.incrementAndGet();
-                } else {
-                    failed.incrementAndGet();
-                }
-            });
-        }
-
-        executor.shutdown();
         try {
-            executor.awaitTermination(60, TimeUnit.MINUTES);
+            for (VersionManifest.VersionEntry entry : versions) {
+                versionExecutor.submit(() -> {
+                    boolean ok = mirrorVersion(entry, assetExecutor);
+                    if (ok) {
+                        succeeded.incrementAndGet();
+                    } else {
+                        failed.incrementAndGet();
+                    }
+                });
+            }
+
+            versionExecutor.shutdown();
+            versionExecutor.awaitTermination(60, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
-            log.warn("Mirror interrupted, shutting down executor");
-            executor.shutdownNow();
+            log.warn("Mirror interrupted, shutting down executors");
+            versionExecutor.shutdownNow();
             Thread.currentThread().interrupt();
+        } finally {
+            if (assetExecutor != null) {
+                assetExecutor.shutdown();
+                try {
+                    assetExecutor.awaitTermination(10, TimeUnit.MINUTES);
+                } catch (InterruptedException e) {
+                    assetExecutor.shutdownNow();
+                }
+            }
         }
 
         log.info("=== Mirror complete: {} succeeded, {} failed ===",
@@ -116,7 +146,7 @@ public class MirrorService {
      * Mirror a single version: download its detail JSON, client JAR, and asset index.
      * If withAssets is enabled, also downloads the individual asset files.
      */
-    private boolean mirrorVersion(VersionManifest.VersionEntry entry) {
+    private boolean mirrorVersion(VersionManifest.VersionEntry entry, ExecutorService assetExecutor) {
         log.info("=== Processing version: {} ===", entry.id);
 
         try {
@@ -142,12 +172,9 @@ public class MirrorService {
 
             // c. Download client JAR
             if (detail.downloads != null && detail.downloads.client != null) {
-                String jarUrl = detail.downloads.client.url;
-                String expectedSha1 = detail.downloads.client.sha1;
-                long expectedSize = detail.downloads.client.size;
-
                 DownloadResult jarResult = downloader.download(
-                        jarUrl, versionDir, entry.id + ".jar", expectedSha1, expectedSize);
+                        detail.downloads.client.url, versionDir, entry.id + ".jar",
+                        detail.downloads.client.sha1, detail.downloads.client.size);
                 if (jarResult.isSuccess()) {
                     log.info("  [{}] Client JAR: {}", entry.id,
                             jarResult.getBytesDownloaded() > 0
@@ -158,9 +185,20 @@ public class MirrorService {
                 }
             }
 
-            // d. Download asset index (skip legacy — already downloaded)
+            // d. Download server JAR
+            if (detail.downloads != null && detail.downloads.server != null) {
+                DownloadResult srvResult = downloader.download(
+                        detail.downloads.server.url, versionDir, "minecraft_server." + entry.id + ".jar",
+                        detail.downloads.server.sha1, detail.downloads.server.size);
+                log.info("  [{}] Server JAR: {}", entry.id,
+                        srvResult.isSuccess() ? (srvResult.getBytesDownloaded() > 0
+                                ? HttpDownloader.formatSize(srvResult.getBytesDownloaded()) : "skipped")
+                                : "FAILED - " + srvResult.getErrorMessage());
+            }
+
+            // e. Download asset index (skip legacy — already downloaded, and skip if null)
             if (detail.assetIndex != null && detail.assetIndex.url != null
-                    && !detail.assetIndex.url.equals(MirrorConfig.LEGACY_ASSET_URL_CHECK)) {
+                    && !MirrorConfig.LEGACY_ASSET_ID.equals(detail.assetIndex.id)) {
                 DownloadResult indexResult = downloader.download(
                         detail.assetIndex.url,
                         config.getAssetsIndexesDir(),
@@ -171,10 +209,9 @@ public class MirrorService {
                         indexResult.isSuccess() ? "OK" : "FAILED - " + indexResult.getErrorMessage());
             }
 
-            // e. Download actual asset files (if enabled)
-            if (config.isWithAssets()) {
-                String assetIndexId = detail.assetIndex != null ? detail.assetIndex.id : entry.id;
-                downloadAssetFiles(entry.id, assetIndexId);
+            // f. Download actual asset files (if enabled AND asset index is available)
+            if (config.isWithAssets() && detail.assetIndex != null && assetExecutor != null) {
+                downloadAssetFiles(entry.id, detail.assetIndex.id, assetExecutor);
             }
 
             log.info("  [{}] Done", entry.id);
@@ -194,7 +231,7 @@ public class MirrorService {
      *
      * Asset files are stored as: assets/objects/{hash[0..1]}/{hash}
      */
-    private void downloadAssetFiles(String versionId, String assetIndexId) {
+    private void downloadAssetFiles(String versionId, String assetIndexId, ExecutorService assetExecutor) {
         Path indexesDir = config.getAssetsIndexesDir();
 
         // Find the asset index file. The file is named by assetIndex.id
@@ -224,40 +261,53 @@ public class MirrorService {
 
             log.info("  [{}] Found {} asset files to download", versionId, objects.size());
 
-            int threads = config.getThreadCount();
-            ExecutorService executor = Executors.newFixedThreadPool(threads);
             AtomicInteger assetOk = new AtomicInteger(0);
             AtomicInteger assetFail = new AtomicInteger(0);
             AtomicInteger assetSkipped = new AtomicInteger(0);
+            CountDownLatch latch = new CountDownLatch(objects.size());
 
             for (Map.Entry<String, JsonObject> entry : objects.entrySet()) {
                 JsonObject obj = entry.getValue();
                 String hash = obj.has("hash") ? obj.get("hash").getAsString() : null;
                 long size = obj.has("size") ? obj.get("size").getAsLong() : -1;
 
-                if (hash == null) continue;
+                if (hash == null) {
+                    latch.countDown();
+                    continue;
+                }
 
-                executor.submit(() -> {
-                    String assetUrl = String.format("%s/%s/%s",
-                            MirrorConfig.ASSETS_BASE_URL, hash.substring(0, 2), hash);
-                    Path assetDir = config.getAssetsObjectsDir().resolve(hash.substring(0, 2));
-                    DownloadResult result = downloader.download(assetUrl, assetDir, hash, hash, size);
-                    if (result.getBytesDownloaded() > 0) {
-                        assetOk.incrementAndGet();
-                    } else if (result.isSuccess()) {
-                        assetSkipped.incrementAndGet();
-                    } else {
-                        assetFail.incrementAndGet();
+                assetExecutor.submit(() -> {
+                    try {
+                        String assetUrl = String.format("%s/%s/%s",
+                                MirrorConfig.ASSETS_BASE_URL, hash.substring(0, 2), hash);
+                        Path assetDir = config.getAssetsObjectsDir().resolve(hash.substring(0, 2));
+                        DownloadResult result = downloader.download(assetUrl, assetDir, hash, hash, size);
+                        if (result.getBytesDownloaded() > 0) {
+                            assetOk.incrementAndGet();
+                        } else if (result.isSuccess()) {
+                            assetSkipped.incrementAndGet();
+                        } else {
+                            assetFail.incrementAndGet();
+                        }
+                    } finally {
+                        latch.countDown();
                     }
                 });
             }
 
-            executor.shutdown();
-            executor.awaitTermination(30, TimeUnit.MINUTES);
-
+            // Wait for all asset downloads for this version to complete
+            boolean completed = latch.await(30, TimeUnit.MINUTES);
             long elapsed = System.currentTimeMillis() - start;
-            log.info("  [{}] Asset files: {} ok, {} skipped, {} failed ({}ms)",
-                    versionId, assetOk.get(), assetSkipped.get(), assetFail.get(), elapsed);
+
+            if (!completed) {
+                log.warn("  [{}] Asset download timed out after {} ({} succeeded, {} failed, {} skipped)",
+                        versionId, HttpDownloader.formatTime(elapsed),
+                        assetOk.get(), assetFail.get(), assetSkipped.get());
+            } else {
+                log.info("  [{}] Assets complete in {}: {} downloaded, {} failed, {} skipped",
+                        versionId, HttpDownloader.formatTime(elapsed),
+                        assetOk.get(), assetFail.get(), assetSkipped.get());
+            }
 
         } catch (IOException e) {
             log.error("  [{}] Failed to read asset index: {}", versionId, e.getMessage());

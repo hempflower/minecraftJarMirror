@@ -15,6 +15,10 @@ public class VersionManifest {
         @SerializedName("id")
         public String id;
 
+        /** e.g. "release", "snapshot", "old_beta", "old_alpha" */
+        @SerializedName("type")
+        public String type;
+
         /** URL to this version's detail JSON */
         @SerializedName("url")
         public String url;
