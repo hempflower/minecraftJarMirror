@@ -1,11 +1,23 @@
-# Compiled
-*.elc
+# Build output
+target/
+*.class
+*.jar
+!run.jar
 
-# Packaging
-.cask
+# IDE files
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
 
-# Backup files
-*~
+# Downloaded data (runtime)
+mcdl/
 
-# Undo-tree save-files
-*.~undo-tree
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
