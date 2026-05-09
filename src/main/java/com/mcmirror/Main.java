@@ -105,6 +105,7 @@ public class Main implements Callable<Integer> {
 
         MirrorConfig config = new MirrorConfig();
         MirrorService service = new MirrorService(config);
+        VersionService versionService = new VersionService(config);
 
         try (Scanner scanner = new Scanner(System.in, "UTF-8")) {
             while (scanner.hasNextLine()) {
@@ -114,6 +115,9 @@ public class Main implements Callable<Integer> {
                 switch (input.toLowerCase()) {
                     case "update":
                         service.execute();
+                        break;
+                    case "list":
+                        versionService.listVersions();
                         break;
                     case "status":
                         service.status();
@@ -147,6 +151,7 @@ public class Main implements Callable<Integer> {
         System.out.println();
         System.out.println("Available commands:");
         System.out.println("  update    Download/update all mirrored files");
+        System.out.println("  list      List available Minecraft versions");
         System.out.println("  status    Check local mirror completeness");
         System.out.println("  help      Show this help");
         System.out.println("  quit      Exit the program");
