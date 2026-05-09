@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 
+import java.util.Locale;
 import java.util.Scanner;
 import java.util.concurrent.Callable;
 
@@ -105,15 +106,20 @@ public class Main implements Callable<Integer> {
 
         MirrorConfig config = new MirrorConfig();
         MirrorService service = new MirrorService(config);
+        VersionService versionService = new VersionService(config);
 
         try (Scanner scanner = new Scanner(System.in, "UTF-8")) {
             while (scanner.hasNextLine()) {
                 System.out.print("> ");
                 String input = scanner.nextLine().trim();
+                String normalized = input.toLowerCase(Locale.ROOT);
 
-                switch (input.toLowerCase()) {
+                switch (normalized) {
                     case "update":
                         service.execute();
+                        break;
+                    case "list":
+                        versionService.listVersions();
                         break;
                     case "status":
                         service.status();
@@ -139,7 +145,7 @@ public class Main implements Callable<Integer> {
     private static void printBanner() {
         System.out.println();
         System.out.println("  " + NAME + " v" + VERSION);
-        System.out.println("  Type 'update' to start mirroring, 'help' for commands, 'quit' to exit.");
+        System.out.println("  Commands: update | list | status | help | quit");
         System.out.println();
     }
 
@@ -147,6 +153,7 @@ public class Main implements Callable<Integer> {
         System.out.println();
         System.out.println("Available commands:");
         System.out.println("  update    Download/update all mirrored files");
+        System.out.println("  list      List available Minecraft versions");
         System.out.println("  status    Check local mirror completeness");
         System.out.println("  help      Show this help");
         System.out.println("  quit      Exit the program");
